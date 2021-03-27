@@ -13,7 +13,7 @@ cmake .. && make -j4
 ```
 ## run the code
 go to the bin folder and then to the folder of the application you want to run.
-for hw0 for example
+for hw1 for example
 ```
 cd bin/hw1
 ./hw1
