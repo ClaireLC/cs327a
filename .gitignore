@@ -1,7 +1,4 @@
 build/
 bin/
-*.obj
-*.dae
-*.mtl
 .DS_Store
 *~
