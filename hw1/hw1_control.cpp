@@ -41,7 +41,7 @@ int main() {
 	You can input your joint information and read sensor data C++ style "<<" or ">>". Make sure you only 
 	expect to read or are writing #D.O.F. number of values.
 	*/
-	robot->_q << -M_PI/3, 0.1, -M_PI/2; // Joint 1,2,3 Coordinates (radians, meters, radians)
+	robot->_q << -M_PI/3, 0.075, -M_PI/6; // Joint 1,2,3 Coordinates (radians, meters, radians)
 	robot->_dq << 0, 0, 0; // Joint 1,2,3 Velocities (radians/sec, meters/sec, radians/sec), not used here
 
 	/* 
