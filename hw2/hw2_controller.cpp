@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     int dof = robot->dof();
     VectorXd command_torques = VectorXd::Zero(dof);
     VectorXd g(robot->dof()); //joint space gravity vector
-    MatrixXd J0(6, robot->dof()); //end effector Basic Jacobian, which for this problem is the same as the Task Jacobian
+    MatrixXd J0(6, robot->dof()); //end effector Basic Jacobian
     MatrixXd L_hat(6, 6); //Kinetic Energy Matrix at end effector (op. space)
     VectorXd p_hat(6); //gravity vector at end-effector (op. space)
     const Eigen::MatrixXd In = Eigen::MatrixXd::Identity(robot->dof(), robot->dof()); // n x n identity matrix
