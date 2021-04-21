@@ -156,7 +156,7 @@ int main() {
 	glewInitialize();
 
 	// while window is open:
-	while (!glfwWindowShouldClose(window) && fSimulationRunning)
+	while (!glfwWindowShouldClose(window))
 	{
 		// update graphics. this automatically waits for the correct amount of time
 		int width, height;
