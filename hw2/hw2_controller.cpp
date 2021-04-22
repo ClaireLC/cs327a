@@ -17,6 +17,8 @@ void sighandler(int){runloop = false;}
 #define DEG2RAD(deg) ((double)(deg) * M_PI / 180.0)
 #define RAD2DEG(rad) ((double)(rad) * 180.0 / M_PI)
 
+#define SQRT2 0.707107
+
 // Location of URDF files specifying world and robot information
 const string world_file = "./resources/world_hw2.urdf";
 const string robot_file = "../../resources/kuka_iiwa/kuka_iiwa.urdf";
@@ -84,10 +86,34 @@ int main(int argc, char** argv) {
     VectorXd dv0_des(6); //end effector desired acceleration
     VectorXd ee_error(6); //end effector operational space instantaneous error (position and orientation)
 
+    // Additional controller variables
+    Matrix3d E_base;
+    Matrix3d E;
+    Matrix3d E_inv;
+
+    Quaterniond ee_quat_des; // end effector desired quaternion
+    Quaterniond ee_quat_error;
+    VectorXd ee_dquat_des(4);
+    VectorXd ee_ddquat_des(4);
+    VectorXd ee_vang_des(3);
+    VectorXd ee_dvang_des(3);
+    VectorXd ee_quat_error_vec(4);
+    VectorXd ee_dquat_error_vec(4);
+    VectorXd ee_ddquat_error_vec(4);
+
+    VectorXd ee_ori_error(3);
+    VectorXd ee_pos_error(3);
+
+    //VectorXd F_star(3);
+    //VectorXd M_star(3);
+
     // suggested starting gains
     double op_task_kp = 50; //operational space task proportional gain
     double op_task_kv = 20; //operational space task velocity gain
     double damping_kv = 20; // joint damping velocity gain
+
+    // Position of Task Frame in relation to Link Frame
+    Vector3d ee_pos_in_link = Vector3d(0.0, 0.0, 0.0);
 
     // initialize redis keys
 
@@ -115,7 +141,7 @@ int main(int argc, char** argv) {
 	bool fTimerDidSleep = true;
 	timer.initializeTimer(1000000); // 1 ms pause before starting loop
     double start_time = timer.elapsedTime();
-
+  double current_time = timer.elapsedTime();
 	unsigned long long counter = 0;
 
     cout << "Starting control loop" << endl;
@@ -145,17 +171,114 @@ int main(int argc, char** argv) {
         // (1) Update current robot configuration parameters and desired trajectory values 
         //----------------------------------------------------------------------------------
 
-        
+        // Get current EEF position, rotation, and velocity
+        robot->position(ee_pos, ee_link_name, ee_pos_in_link);
+        cout << "end effector position" << endl;
+        cout << ee_pos.transpose() << endl;
+        robot->rotation(ee_rot_mat, ee_link_name);
+        cout << "rotation matrix" << endl;
+        cout << ee_rot_mat << endl;
+        Quaterniond q(ee_rot_mat); // end effector rotation in quaternion form
+        cout << "quaternion" << endl;
+        cout<<"["<<q.w()<<" "<<q.x()<<" "<<q.y()<<" "<<q.z()<<"]"<<endl;
+        robot->velocity6d(v0, ee_link_name, ee_pos_in_link);
+        cout << "end effector velocity" << endl;
+        cout << v0.transpose() << endl;
+
+        // Update more robot values
+        robot->gravityVector(g); // Update gravity vectory
+        robot->J_0(J0,ee_link_name,ee_pos_in_link); // Full Jacobian
+        // TODO maybe I need to compute these by hand?
+        robot->operationalSpaceMatrices(L_hat, J_pseudo, N_proj, J0);
+
+        // Set E and E_inv matrices
+        E_base << -q.x(), -q.y(), -q.z(),
+              q.w(),  q.z(), -q.y(),
+              -q.z(), q.w(), q.x(),
+               q.y(), -q.x(), q.w();
+        E = 0.5 * E_base;
+        E_inv = 2.0 * E_base.transpose();
 
         // --------------------------------------------------------------------
         // (2) Compute desired operational space trajectory values and errors 
         //---------------------------------------------------------------------
+        // Desired position and quaternion
+        ee_pos_des(0) = 0;
+        ee_pos_des(1) = 0.5 + 0.1 * cos(0.4 * M_PI * curr_time);
+        ee_pos_des(2) = 0.65 - 0.05 * cos(0.8 * M_PI * curr_time);
+        ee_quat_des.w() = (1/SQRT2) * sin(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
+        ee_quat_des.x() = (1/SQRT2) * sin(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
+        ee_quat_des.y() = (1/SQRT2) * cos(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
+        ee_quat_des.z() = (1/SQRT2) * cos(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
+        
+        ee_pos_error = ee_pos_des - ee_pos;
+        ee_quat_error = ee_quat_des.normalized() * q.inverse();
+        ee_quat_error_vec << ee_quat_error.w(), ee_quat_error.x(),
+                              ee_quat_error.y(), ee_quat_error.z();
+        ee_ori_error = E_inv * ee_quat_error_vec;
+    
+        // Compute ee pose error
+        // TODO maybe don't need ee_error stacked, if I am using the 2 separate equations?
+        ee_error(0) = ee_pos_error(0);
+        ee_error(1) = ee_pos_error(1);
+        ee_error(2) = ee_pos_error(2);
+        ee_error(3) = ee_ori_error(0);
+        ee_error(4) = ee_ori_error(1);
+        ee_error(5) = ee_ori_error(2);
 
+        // Desired velocity
+        v0_des(0) = 0;
+        v0_des(1) = (-0.2/5) * M_PI * sin(0.4 * M_PI * curr_time);
+        v0_des(2) = (0.2/5) * M_PI * sin(0.8 * M_PI * curr_time);
+        ee_dquat_des(0) = M_PI*M_PI*(-1/SQRT2)*(0.1)*sin(0.4*M_PI*curr_time)*
+                            cos(0.25*M_PI*cos(0.4*M_PI*curr_time));
+        ee_dquat_des(1) = M_PI*M_PI*(1/SQRT2)*(0.1)*sin(0.4*M_PI*curr_time)*
+                            sin(0.25*M_PI*cos(0.4*M_PI*curr_time));
+        ee_dquat_des(2) = M_PI*M_PI*(-1/SQRT2)*(0.1)*sin(0.4*M_PI*curr_time)*
+                            cos(0.25*M_PI*cos(0.4*M_PI*curr_time));
+        ee_dquat_des(3) = M_PI*M_PI*(1/SQRT2)*(0.1)*sin(0.4*M_PI*curr_time)*
+                            sin(0.25*M_PI*cos(0.4*M_PI*curr_time));
+        // multiply by E_inv to get desired angular velocity
+        ee_vang_des = E_inv * ee_dquat_des;
+        v0_des(3) = ee_vang_des(0);
+        v0_des(4) = ee_vang_des(1);
+        v0_des(5) = ee_vang_des(2);
+
+        // Desired acceleration
+        dv0_des(0) = 0;
+        dv0_des(1) = (-0.4*M_PI*M_PI/25) * cos(0.4*M_PI*curr_time);
+        dv0_des(2) = (-0.8*M_PI*M_PI/25) * cos(0.8*M_PI*curr_time);
+        ee_ddquat_des(0) = (-1/SQRT2)*0.01*M_PI*M_PI*M_PI*(
+                          4*cos(0.4*M_PI*curr_time)*cos(0.25*M_PI*cos(0.4*M_PI*curr_time)) + 
+                          M_PI*sin(0.4*M_PI*curr_time)*sin(0.4*M_PI*curr_time)*
+                          sin(0.25*M_PI*cos(0.4*M_PI*curr_time))
+                          );
+        ee_ddquat_des(1) = (-1/SQRT2)*0.01*M_PI*M_PI*M_PI*(
+                          -4*cos(0.4*M_PI*curr_time)*sin(0.25*M_PI*cos(0.4*M_PI*curr_time)) + 
+                          M_PI*sin(0.4*M_PI*curr_time)*sin(0.4*M_PI*curr_time)*
+                          cos(0.25*M_PI*cos(0.4*M_PI*curr_time))
+                          );
+        ee_ddquat_des(2) = (-1/SQRT2)*0.01*M_PI*M_PI*M_PI*(
+                          4*cos(0.4*M_PI*curr_time)*cos(0.25*M_PI*cos(0.4*M_PI*curr_time)) + 
+                          M_PI*sin(0.4*M_PI*curr_time)*sin(0.4*M_PI*curr_time)*
+                          sin(0.25*M_PI*cos(0.4*M_PI*curr_time))
+                          );
+        ee_ddquat_des(3) = (-1/SQRT2)*0.01*M_PI*M_PI*M_PI*(
+                          -4*cos(0.4*M_PI*curr_time)*sin(0.25*M_PI*cos(0.4*M_PI*curr_time)) + 
+                          M_PI*sin(0.4*M_PI*curr_time)*sin(0.4*M_PI*curr_time)*
+                          cos(0.25*M_PI*cos(0.4*M_PI*curr_time))
+                          );
+        // multiply by E_inv to get desired angular acceleration
+        ee_dvang_des = E_inv * ee_ddquat_des;
+        dv0_des(3) = ee_dvang_des(0);
+        dv0_des(4) = ee_dvang_des(1);
+        dv0_des(5) = ee_dvang_des(2);
+        
 
         // ---------------------------------------------------------------------------------
         // (3) Compute joint torques
         //----------------------------------------------------------------------------------
-
+        // TODO F_star = 
 
         /* ------------------------------------------------------------------------------------
             END OF FILL ME IN
