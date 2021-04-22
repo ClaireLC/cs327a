@@ -83,29 +83,23 @@ int main(int argc, char** argv) {
     VectorXd v0(6); //end effector velocity
     Vector3d ee_pos_des; // end effector desired position
     VectorXd v0_des(6); //end effector desired velocity
-    VectorXd dv0_des(6); //end effector desired acceleration
-    VectorXd ee_error(6); //end effector operational space instantaneous error (position and orientation)
+    VectorXd dv0_des(6);  //end effector desired acceleration
+    VectorXd ee_error(6); //ee operational space instantaneous error (position, orientation)
 
     // Additional controller variables
-    Matrix3d E_base;
-    Matrix3d E;
-    Matrix3d E_inv;
+    MatrixXd E_base(4,3);      // E base matrix (unscaled)
+    MatrixXd E(4,3);           // E
+    MatrixXd E_inv(3,4);       // E inverse
+    VectorXd ee_pos_error(3);  // ee position error
+    Quaterniond ee_quat_des;   // end effector desired quaternion
+    Vector3d ee_ori_error;     // delta_phi
+    VectorXd ee_dquat_des(4);  // desired quaternion first derivative
+    VectorXd ee_ddquat_des(4); // desired quaternion second derivative
+    VectorXd ee_vang_des(3);   // desired angular velocity
+    VectorXd ee_dvang_des(3);  // desired angular acceleration
 
-    Quaterniond ee_quat_des; // end effector desired quaternion
-    Quaterniond ee_quat_error;
-    VectorXd ee_dquat_des(4);
-    VectorXd ee_ddquat_des(4);
-    VectorXd ee_vang_des(3);
-    VectorXd ee_dvang_des(3);
-    VectorXd ee_quat_error_vec(4);
-    VectorXd ee_dquat_error_vec(4);
-    VectorXd ee_ddquat_error_vec(4);
-
-    VectorXd ee_ori_error(3);
-    VectorXd ee_pos_error(3);
-
-    //VectorXd F_star(3);
-    //VectorXd M_star(3);
+    VectorXd F_star(6);
+    VectorXd F(6);
 
     // suggested starting gains
     double op_task_kp = 50; //operational space task proportional gain
@@ -191,13 +185,21 @@ int main(int argc, char** argv) {
         // TODO maybe I need to compute these by hand?
         robot->operationalSpaceMatrices(L_hat, J_pseudo, N_proj, J0);
 
-        // Set E and E_inv matrices
+        cout << "Op space matrices" << endl;
+        cout << J0 << endl;
+        cout << L_hat << endl;
+        cout << J_pseudo << endl;
+
+        //// Set E and E_inv matrices
         E_base << -q.x(), -q.y(), -q.z(),
               q.w(),  q.z(), -q.y(),
               -q.z(), q.w(), q.x(),
                q.y(), -q.x(), q.w();
         E = 0.5 * E_base;
         E_inv = 2.0 * E_base.transpose();
+        cout << "E matrices" << endl;
+        cout << E_base << endl;
+        cout << E_inv << endl;
 
         // --------------------------------------------------------------------
         // (2) Compute desired operational space trajectory values and errors 
@@ -211,20 +213,18 @@ int main(int argc, char** argv) {
         ee_quat_des.y() = (1/SQRT2) * cos(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
         ee_quat_des.z() = (1/SQRT2) * cos(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
         
-        ee_pos_error = ee_pos_des - ee_pos;
-        ee_quat_error = ee_quat_des.normalized() * q.inverse();
-        ee_quat_error_vec << ee_quat_error.w(), ee_quat_error.x(),
-                              ee_quat_error.y(), ee_quat_error.z();
-        ee_ori_error = E_inv * ee_quat_error_vec;
+        ee_pos_error = ee_pos - ee_pos_des;
+        Sai2Model::orientationError(ee_ori_error, ee_quat_des, q);
     
         // Compute ee pose error
-        // TODO maybe don't need ee_error stacked, if I am using the 2 separate equations?
         ee_error(0) = ee_pos_error(0);
         ee_error(1) = ee_pos_error(1);
         ee_error(2) = ee_pos_error(2);
         ee_error(3) = ee_ori_error(0);
         ee_error(4) = ee_ori_error(1);
         ee_error(5) = ee_ori_error(2);
+        cout << "EE pos error" << endl;
+        cout << ee_error << endl;
 
         // Desired velocity
         v0_des(0) = 0;
@@ -243,6 +243,8 @@ int main(int argc, char** argv) {
         v0_des(3) = ee_vang_des(0);
         v0_des(4) = ee_vang_des(1);
         v0_des(5) = ee_vang_des(2);
+        cout << "EE v_des" << endl;
+        cout << v0_des << endl;
 
         // Desired acceleration
         dv0_des(0) = 0;
@@ -273,12 +275,16 @@ int main(int argc, char** argv) {
         dv0_des(3) = ee_dvang_des(0);
         dv0_des(4) = ee_dvang_des(1);
         dv0_des(5) = ee_dvang_des(2);
+        cout << "EE dv_des" << endl;
+        cout << dv0_des << endl;
         
-
         // ---------------------------------------------------------------------------------
         // (3) Compute joint torques
         //----------------------------------------------------------------------------------
-        // TODO F_star = 
+        F_star = dv0_des - op_task_kv*(v0 - v0_des) - op_task_kp*ee_error;
+        p_hat = J_pseudo.transpose() * g;
+        F = L_hat * F_star - p_hat;
+        command_torques = J0.transpose() * F;
 
         /* ------------------------------------------------------------------------------------
             END OF FILL ME IN
