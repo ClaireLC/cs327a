@@ -100,6 +100,9 @@ int main(int argc, char** argv) {
 
     VectorXd F_star(6);
     VectorXd F(6);
+    MatrixXd A;
+
+    VectorXd joint_damping(6);
 
     // suggested starting gains
     double op_task_kp = 50; //operational space task proportional gain
@@ -167,17 +170,9 @@ int main(int argc, char** argv) {
 
         // Get current EEF position, rotation, and velocity
         robot->position(ee_pos, ee_link_name, ee_pos_in_link);
-        cout << "end effector position" << endl;
-        cout << ee_pos.transpose() << endl;
         robot->rotation(ee_rot_mat, ee_link_name);
-        cout << "rotation matrix" << endl;
-        cout << ee_rot_mat << endl;
         Quaterniond q(ee_rot_mat); // end effector rotation in quaternion form
-        cout << "quaternion" << endl;
-        cout<<"["<<q.w()<<" "<<q.x()<<" "<<q.y()<<" "<<q.z()<<"]"<<endl;
         robot->velocity6d(v0, ee_link_name, ee_pos_in_link);
-        cout << "end effector velocity" << endl;
-        cout << v0.transpose() << endl;
 
         // Update more robot values
         robot->gravityVector(g); // Update gravity vectory
@@ -283,8 +278,17 @@ int main(int argc, char** argv) {
         //----------------------------------------------------------------------------------
         F_star = dv0_des - op_task_kv*(v0 - v0_des) - op_task_kp*ee_error;
         p_hat = J_pseudo.transpose() * g;
+
+        //L_hat = MatrixXd::Identity(6,6); // Part d
+
         F = L_hat * F_star - p_hat;
         command_torques = J0.transpose() * F;
+
+        // Part c) Joint damping
+        A = robot->_M; // Mass matrix
+        joint_damping = N_proj.transpose() * (A * -damping_kv * robot->_dq + g);
+        command_torques = J0.transpose() * F + joint_damping;
+
 
         /* ------------------------------------------------------------------------------------
             END OF FILL ME IN
