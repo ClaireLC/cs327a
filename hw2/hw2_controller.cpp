@@ -75,6 +75,7 @@ int main(int argc, char** argv) {
     VectorXd p_hat(6); //gravity vector at end-effector (op. space)
     const Eigen::MatrixXd In = Eigen::MatrixXd::Identity(robot->dof(), robot->dof()); // n x n identity matrix
     Eigen::MatrixXd J_pseudo(robot->dof(), 6);  //Right Psuedoinverse of J0
+    Eigen::MatrixXd _JJT(robot->dof(), 6);  //Right Psuedoinverse of J0
     Eigen::MatrixXd N_proj(robot->dof(), robot->dof()); //I - J_pseudo*J0, null space projection matrix
     Vector3d ee_pos; //end effector position
     Matrix3d ee_rot_mat; //end effector rotation, in matrix form
@@ -179,6 +180,10 @@ int main(int argc, char** argv) {
         robot->J_0(J0,ee_link_name,ee_pos_in_link); // Full Jacobian
         // TODO maybe I need to compute these by hand?
         robot->operationalSpaceMatrices(L_hat, J_pseudo, N_proj, J0);
+
+        // Compute pseudo inverse
+        _JJT = J0 * J0.transpose();
+        J_pseudo = J0.transpose() * _JJT.inverse();
 
         cout << "Op space matrices" << endl;
         cout << J0 << endl;
