@@ -104,7 +104,20 @@ int main(int argc, char** argv) {
     Eigen::Vector3d p_bar; //gravity vector at end-effector computed with pseudoinverse
     Eigen::Vector3d ee_pos; //end effector position
     Eigen::Vector3d v; //end effector velocity
-    Eigen::VectorXd qd(robot->dof()); //desired joint positions
+    Eigen::VectorXd q_des(robot->dof()); //desired joint positions
+
+    MatrixXd A(robot->dof(), robot->dof());
+    VectorXd q(robot->dof());
+    VectorXd dq(robot->dof());
+    VectorXd F_star(3);
+    VectorXd F(3);
+
+    MatrixXd L_op(6,6);
+    MatrixXd J_bar_op(robot->dof(), 6);
+    MatrixXd N_op(robot->dof(), robot->dof()); //I - Jbar*Jv, null space projection matrix for Jbar
+    MatrixXd J(6, robot->dof());
+
+    VectorXd u_q_tracking(robot->dof());
 
     // suggested starting gains
     double op_task_kp = 50; //operational space task proportional gain
@@ -154,6 +167,31 @@ int main(int argc, char** argv) {
 		/* ------------------------------------------------------------------------------------
             FILL ME IN: set joint torques
         -------------------------------------------------------------------------------------*/
+        // Update robot state
+        robot->position(ee_pos, ee_link_name, ee_pos_local);
+        robot->linearVelocity(v, ee_link_name, ee_pos_local);
+        A = robot->_M; // Mass matrix
+        robot->gravityVector(g); // Update gravity vectory
+        robot->Jv(Jv, ee_link_name, ee_pos_local);
+        robot->J_0(J, ee_link_name, ee_pos_local);
+        q = robot->_q;
+        dq = robot->_dq;
+        Lv = (Jv * A.inverse() * Jv.transpose()).inverse();
+
+        q_des(0) = q(0);
+        q_des(1) = -1*(M_PI/8) + (M_PI/8) * sin(0.2 * M_PI * curr_time);
+        q_des(2) = q(2);
+        q_des(3) = q(3);
+        q_des(4) = q(4);
+        q_des(5) = q(5);
+
+        //cout << ee_pos << endl;
+        //cout << v << endl;
+        //cout << A << endl;
+        //cout << g << endl;
+        //cout << Jv << endl;
+        //cout << q << endl;
+        //cout << dq << endl;
 
         switch (enum_problem_part) {
 
@@ -161,6 +199,21 @@ int main(int argc, char** argv) {
             //----------------------------------------------------
             case PART1:
                 // control torques using pseudoinverse
+                // Update more robot values
+                J_pseudo = Jv.transpose() * (Jv * Jv.transpose()).inverse();
+                p_pseudo = J_pseudo.transpose() * g;
+                N_pseudo = In - J_pseudo * Jv;
+
+                F_star = -op_task_kp * (ee_pos - ee_des_pos) - op_task_kv * v;
+              
+                u_q_tracking = (In - Jv.transpose() * J_pseudo.transpose()) * 
+                                 (A*(-joint_task_kp*(q - q_des) - joint_task_kv*dq) + g);
+
+                F = Lv * F_star + p_pseudo;
+
+                command_torques = Jv.transpose() * F + u_q_tracking;
+  
+                cout << command_torques.transpose() << endl;
                 
                 break;
 
@@ -168,6 +221,20 @@ int main(int argc, char** argv) {
             //----------------------------------------------------
             case PART2:
                 // control torques using dynamically consistent inverse 
+                J_bar = A.inverse() * Jv.transpose() * Lv;
+                p_bar = J_bar.transpose() * g;
+                N_bar = In - J_bar * Jv;
+
+                F_star = -op_task_kp * (ee_pos - ee_des_pos) - op_task_kv * v;
+              
+                u_q_tracking = (In - Jv.transpose() * J_bar.transpose()) * 
+                                 (A*(-joint_task_kp*(q - q_des) - joint_task_kv*dq) + g);
+
+                F = Lv * F_star + p_bar;
+
+                command_torques = Jv.transpose() * F + u_q_tracking;
+  
+                cout << command_torques.transpose() << endl;
                 
                 break;
 
