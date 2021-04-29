@@ -17,6 +17,8 @@ void sighandler(int){runloop = false;}
 #define DEG2RAD(deg) ((double)(deg) * M_PI / 180.0)
 #define RAD2DEG(rad) ((double)(rad) * 180.0 / M_PI)
 
+#define SQRT2 0.707107
+
 // Location of URDF files specifying world and robot information
 const string world_file = "./resources/world_hw3_p3.urdf";
 const string robot_file = "../../resources/kuka_iiwa/kuka_iiwa.urdf";
@@ -66,8 +68,9 @@ int main(int argc, char** argv) {
     Eigen::VectorXd g(robot->dof()); //joint space gravity vector
     Eigen::MatrixXd J0(6, robot->dof()); //end effector basic Jacobian
     Eigen::MatrixXd L0(6, 6); //Lambda_0 at end effector
-    Eigen::VectorXd p(6); //gravity vector at end-effector
+    Eigen::VectorXd p_bar(6); //gravity vector at end-effector
     const Eigen::MatrixXd In = Eigen::MatrixXd::Identity(robot->dof(), robot->dof()); // n x n identity matrix
+    const Eigen::MatrixXd I3 = Eigen::MatrixXd::Identity(3, 3); // 3 x 3 identity matrix
     Eigen::MatrixXd J_bar(robot->dof(), 6);  //A-weighted generalized inverse of J0
     Eigen::MatrixXd N_bar(robot->dof(), robot->dof()); //I - Jbar*J0, null space projection matrix for Jbar
     Eigen::Vector3d ee_pos; //end effector position
@@ -76,16 +79,59 @@ int main(int argc, char** argv) {
     Eigen::Quaterniond ee_rot_lambda(ee_rot_mat); // end effector rotation in quaternion form
     Eigen::VectorXd ee_error(6); //end effector operational space instantaneous error
     Eigen::VectorXd v0(6); //end effector velocity
-    Eigen::VectorXd v0d(6); //end effector desired velocity
-    Eigen::VectorXd dv0d(6); //end effector desired acceleration
     Eigen::MatrixXd select_motion(6,6); // selection matrix for motion, Omega
     Eigen::MatrixXd select_forces(6,6); // selection matrix for forces, Omega_bar
-    Eigen::VectorXd F_d(6); // desired end effector force
+    Eigen::VectorXd F_des(6); // desired end effector force
 
     // suggested starting gains
     double op_task_kp = 50; //operational space task proportional gain
     double op_task_kv = 20; //operational space task velocity gain
     double joint_damping_kv = 20; // joint damping velocity gain
+
+    // Additional controller variables
+    VectorXd q(robot->dof());
+    VectorXd dq(robot->dof());
+    Vector3d ee_pos_des; // end effector desired position
+    VectorXd v0_des(6); //end effector desired velocity
+    VectorXd dv0_des(6);  //end effector desired acceleration
+    MatrixXd E_base(4,3);      // E base matrix (unscaled)
+    MatrixXd E(4,3);           // E
+    MatrixXd E_inv(3,4);       // E inverse
+    VectorXd ee_pos_error(3);  // ee position error
+    Quaterniond ee_quat_des;   // end effector desired quaternion
+    Vector3d ee_ori_error;     // delta_phi
+    VectorXd ee_dquat_des(4);  // desired quaternion first derivative
+    VectorXd ee_ddquat_des(4); // desired quaternion second derivative
+    VectorXd ee_vang_des(3);   // desired angular velocity
+    VectorXd ee_dvang_des(3);  // desired angular acceleration
+
+    VectorXd F_star(6);
+    VectorXd F(6);
+    MatrixXd A(robot->dof(), robot->dof());
+
+    Eigen::MatrixXd sigma_f(3,3); // motion specification matrix, linear
+    Eigen::MatrixXd sigma_m(3,3); // motion specification matrix, angular
+    sigma_f << 0.0, 0.0, 0.0,
+               0.0, 1.0, 0.0,
+               0.0, 0.0, 1.0;
+    sigma_m << 1.0, 0.0, 0.0,
+               0.0, 0.0, 0.0,
+               0.0, 0.0, 0.0;
+
+    Eigen::MatrixXd sigma_bar_f(3,3); // force specification matrix
+    Eigen::MatrixXd sigma_bar_m(3,3); // moment specification matrix
+    sigma_bar_f = I3 - sigma_f; // force specification matrix
+    sigma_bar_m = I3 - sigma_m; // moment specification matrix
+    
+    cout << sigma_bar_f << endl;
+    cout << sigma_bar_m << endl;
+
+    Eigen::MatrixXd omega_f(3,3); // motion selection matrix, linear
+    Eigen::MatrixXd omega_m(3,3); // motion selection matrix, angular
+    Eigen::MatrixXd omega_bar_f(3,3); // force selection matrix, linear
+    Eigen::MatrixXd omega_bar_m(3,3); // force selection matrix, angular
+
+    VectorXd joint_damping(6);
 
     // initialize redis keys
 
@@ -130,19 +176,147 @@ int main(int argc, char** argv) {
             FILL ME IN: set joint torques
         -------------------------------------------------------------------------------------*/
 
-        // ---------------------------------------------------------------------------------
-        // (1) Update current robot configuration parameters and desired trajectory values 
-        //----------------------------------------------------------------------------------
+        // Get current EEF position, rotation, and velocity
+        robot->position(ee_pos, ee_link_name, ee_pos_local);
+        robot->rotation(ee_rot_mat, ee_link_name);
+        Quaterniond quat(ee_rot_mat); // end effector rotation in quaternion form
+        robot->velocity6d(v0, ee_link_name, ee_pos_local);
+        q = robot->_q;
+        dq = robot->_dq;
 
-        
+        // Update dynamics quantities
+        A = robot->_M; // Mass matrix
+        robot->gravityVector(g); // Update gravity vectory
+        robot->J_0(J0,ee_link_name,ee_pos_local); // Full Jacobian
+        L0 = (J0 * A.inverse() * J0.transpose()).inverse();
+
+        // Compute J_bar and N_bar
+        J_bar = A.inverse() * J0.transpose() * L0;
+        p_bar = J_bar.transpose() * g;
+        N_bar = In - J_bar * J0;
+
+        //cout << "Op space matrices" << endl;
+        //cout << J0 << endl;
+        //cout << L0 << endl;
+        //cout << J_bar << endl;
+
+        // Set E and E_inv matrices
+        E_base << -quat.x(), -quat.y(), -quat.z(),
+              quat.w(),  quat.z(), -quat.y(),
+              -quat.z(), quat.w(), quat.x(),
+               quat.y(), -quat.x(), quat.w();
+        E = 0.5 * E_base;
+        E_inv = 2.0 * E_base.transpose();
+        //cout << "E matrices" << endl;
+        //cout << E_base << endl;
+        //cout << E_inv << endl;
+
+        // Compute selection matrices
+        omega_f = ee_rot_mat.transpose() * sigma_f * ee_rot_mat;
+        omega_m = ee_rot_mat.transpose() * sigma_m * ee_rot_mat;
+        omega_bar_f = ee_rot_mat.transpose() * sigma_bar_f * ee_rot_mat;
+        omega_bar_m = ee_rot_mat.transpose() * sigma_bar_m * ee_rot_mat;
+
+        select_motion.topLeftCorner(3,3) = omega_f;
+        select_motion.bottomRightCorner(3,3) = omega_m;
+        select_forces.topLeftCorner(3,3) = omega_bar_f;
+        select_forces.bottomRightCorner(3,3) = omega_bar_m;
+
+        //cout << "select motion" << endl;
+        //cout << select_motion << endl;
+        //cout << "select forces" << endl;
+        //cout << select_forces << endl;
+
         // --------------------------------------------------------------------
         // (2) Compute desired operational space trajectory values and errors 
         //---------------------------------------------------------------------
+        // Desired position and quaternion
+        ee_pos_des(0) = ee_pos(0);
+        ee_pos_des(1) = 0.5 + 0.1 * cos(0.4 * M_PI * curr_time);
+        ee_pos_des(2) = 0.65 - 0.05 * cos(0.8 * M_PI * curr_time);
+        ee_quat_des.w() = (1/SQRT2) * sin(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
+        ee_quat_des.x() = (1/SQRT2) * sin(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
+        ee_quat_des.y() = (1/SQRT2) * cos(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
+        ee_quat_des.z() = (1/SQRT2) * cos(0.25 * M_PI * cos(0.4 * M_PI * curr_time));
         
+        ee_pos_error = ee_pos - ee_pos_des;
+        Sai2Model::orientationError(ee_ori_error, ee_quat_des, quat);
+    
+        // Compute ee pose error
+        ee_error(0) = ee_pos_error(0);
+        ee_error(1) = ee_pos_error(1);
+        ee_error(2) = ee_pos_error(2);
+        ee_error(3) = ee_ori_error(0);
+        ee_error(4) = ee_ori_error(1);
+        ee_error(5) = ee_ori_error(2);
+        //cout << "EE pos error" << endl;
+        //cout << ee_error << endl;
 
+        // Desired velocity
+        v0_des(0) = v0(0);
+        v0_des(1) = (-0.2/5) * M_PI * sin(0.4 * M_PI * curr_time);
+        v0_des(2) = (0.2/5) * M_PI * sin(0.8 * M_PI * curr_time);
+        ee_dquat_des(0) = M_PI*M_PI*(-1/SQRT2)*(0.1)*sin(0.4*M_PI*curr_time)*
+                            cos(0.25*M_PI*cos(0.4*M_PI*curr_time));
+        ee_dquat_des(1) = M_PI*M_PI*(1/SQRT2)*(0.1)*sin(0.4*M_PI*curr_time)*
+                            sin(0.25*M_PI*cos(0.4*M_PI*curr_time));
+        ee_dquat_des(2) = M_PI*M_PI*(-1/SQRT2)*(0.1)*sin(0.4*M_PI*curr_time)*
+                            cos(0.25*M_PI*cos(0.4*M_PI*curr_time));
+        ee_dquat_des(3) = M_PI*M_PI*(1/SQRT2)*(0.1)*sin(0.4*M_PI*curr_time)*
+                            sin(0.25*M_PI*cos(0.4*M_PI*curr_time));
+        // multiply by E_inv to get desired angular velocity
+        ee_vang_des = E_inv * ee_dquat_des;
+        v0_des(3) = ee_vang_des(0);
+        v0_des(4) = ee_vang_des(1);
+        v0_des(5) = ee_vang_des(2);
+        //cout << "EE v_des" << endl;
+        //cout << v0_des << endl;
+
+        // Desired acceleration
+        dv0_des(0) = 0;
+        dv0_des(1) = (-0.4*M_PI*M_PI/25) * cos(0.4*M_PI*curr_time);
+        dv0_des(2) = (-0.8*M_PI*M_PI/25) * cos(0.8*M_PI*curr_time);
+        ee_ddquat_des(0) = (-1/SQRT2)*0.01*M_PI*M_PI*M_PI*(
+                          4*cos(0.4*M_PI*curr_time)*cos(0.25*M_PI*cos(0.4*M_PI*curr_time)) + 
+                          M_PI*sin(0.4*M_PI*curr_time)*sin(0.4*M_PI*curr_time)*
+                          sin(0.25*M_PI*cos(0.4*M_PI*curr_time))
+                          );
+        ee_ddquat_des(1) = (-1/SQRT2)*0.01*M_PI*M_PI*M_PI*(
+                          -4*cos(0.4*M_PI*curr_time)*sin(0.25*M_PI*cos(0.4*M_PI*curr_time)) + 
+                          M_PI*sin(0.4*M_PI*curr_time)*sin(0.4*M_PI*curr_time)*
+                          cos(0.25*M_PI*cos(0.4*M_PI*curr_time))
+                          );
+        ee_ddquat_des(2) = (-1/SQRT2)*0.01*M_PI*M_PI*M_PI*(
+                          4*cos(0.4*M_PI*curr_time)*cos(0.25*M_PI*cos(0.4*M_PI*curr_time)) + 
+                          M_PI*sin(0.4*M_PI*curr_time)*sin(0.4*M_PI*curr_time)*
+                          sin(0.25*M_PI*cos(0.4*M_PI*curr_time))
+                          );
+        ee_ddquat_des(3) = (-1/SQRT2)*0.01*M_PI*M_PI*M_PI*(
+                          -4*cos(0.4*M_PI*curr_time)*sin(0.25*M_PI*cos(0.4*M_PI*curr_time)) + 
+                          M_PI*sin(0.4*M_PI*curr_time)*sin(0.4*M_PI*curr_time)*
+                          cos(0.25*M_PI*cos(0.4*M_PI*curr_time))
+                          );
+        // multiply by E_inv to get desired angular acceleration
+        ee_dvang_des = E_inv * ee_ddquat_des;
+        dv0_des(3) = ee_dvang_des(0);
+        dv0_des(4) = ee_dvang_des(1);
+        dv0_des(5) = ee_dvang_des(2);
+        //cout << "EE dv_des" << endl;
+        //cout << dv0_des << endl;
+        
         // ---------------------------------------------------------------------------------
         // (3) Compute joint torques
         //----------------------------------------------------------------------------------
+        F_star = dv0_des - op_task_kv*(v0 - v0_des) - op_task_kp*ee_error;
+
+        //L_hat = MatrixXd::Identity(6,6); // Part d
+
+        F = L0 * F_star + p_bar;
+        command_torques = J0.transpose() * F;
+
+        // Part c) Joint damping
+        joint_damping = N_bar.transpose() * (A * -joint_damping_kv * robot->_dq + g);
+        command_torques = J0.transpose() * F + joint_damping;
 
        
 		/* ------------------------------------------------------------------------------------
