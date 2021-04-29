@@ -286,7 +286,7 @@ int main(int argc, char** argv) {
         F_star = dv0_des - op_task_kv*(v0 - v0_des) - op_task_kp*ee_error;
 
         F_motion = L0 * select_motion * F_star + p_bar;
-        F_force = L0 * select_forces * (F_des - op_task_kp * v0);
+        F_force = L0 * select_forces * (-op_task_kp * v0) + F_des;
         F_total = F_motion + F_force;
 
         cout << "F_motion" << endl;
