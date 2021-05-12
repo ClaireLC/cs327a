@@ -249,15 +249,14 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
   Eigen::Affine3d robot1_base_to_ee; // Transformation from base frame to ee link frame
   Eigen::Affine3d robot2_base_to_ee; // Transformation from base frame to ee link frame
 
-	Eigen::MatrixXd augmented_object_inertia(6,6);
-	Eigen::VectorXd augmented_object_p(6);
+	Eigen::MatrixXd augmented_object_inertia(6,6); Eigen::VectorXd augmented_object_p(6);
 
 	Eigen::MatrixXd G(2*6, 2*6);
 	Eigen::MatrixXd W(6, 2*6);
 	Eigen::MatrixXd W_f(6, 6);
 	Eigen::MatrixXd W_m(6, 6);
   Eigen::MatrixXd E_bar(1,6);
-  Eigen::Vector3d e12; // Vector from r1 ee to r2 ee
+  Eigen::MatrixXd e12(1,3); // Vector from r1 ee to r2 ee
   Eigen::MatrixXd Itilde(5,6);
 
   const Eigen::MatrixXd I3 = MatrixXd::Identity(3, 3); // 3 x 3 identity matrix
@@ -354,8 +353,8 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
     robot2->transform(robot2_base_to_ee, ee_link_name);
 
     // Get object com in ee frame
-    object_com_in_robot1_ee_frame = robot1_base_to_ee * robot1_base_frame * object_current_pos;
-    object_com_in_robot2_ee_frame = robot2_base_to_ee * robot2_base_frame * object_current_pos;
+    object_com_in_robot1_ee_frame = robot1_base_to_ee.inverse() * robot1_base_frame.inverse() * object_current_pos;
+    object_com_in_robot2_ee_frame = robot2_base_to_ee.inverse() * robot2_base_frame.inverse() * object_current_pos;
 
     cout << "Object com in robot 1 ee frame" << endl;
     cout << object_com_in_robot1_ee_frame << endl;
@@ -397,8 +396,8 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
     // Get robot eef positions in world frame
     robot1->position(robot1_ee_pos_r1f, ee_link_name);
     robot2->position(robot2_ee_pos_r2f, ee_link_name);
-    robot1_ee_pos_wf = robot1_base_frame.inverse() * robot1_ee_pos_r1f; // TODO is this right? or inverse?
-    robot2_ee_pos_wf = robot2_base_frame.inverse() * robot2_ee_pos_r2f;
+    robot1_ee_pos_wf = robot1_base_frame * robot1_ee_pos_r1f; // TODO is this right? or inverse?
+    robot2_ee_pos_wf = robot2_base_frame * robot2_ee_pos_r2f;
 
     r_1 = robot1_ee_pos_wf - object_current_pos; 
     r_2 = robot2_ee_pos_wf - object_current_pos; 
@@ -406,28 +405,34 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
     r_2_hat = getCrossProductMat(r_2);
 
     e12 = robot2_ee_pos_wf - robot1_ee_pos_wf;
-    E_bar << -e12/2.0, e12/2.0;
+    //e12 << 0, 1, 0;
+    E_bar.block(0,0,0,3) << -e12 / 2.0;
+    E_bar.block(0,3,0,6) << e12 / 2.0;
 
-    //cout << "rf" << endl;
-    //cout << robot1_ee_pos_r1f << endl;
-    //cout << "wf" << endl;
-    //cout << robot1_ee_pos_wf << endl;
-    //cout << "e12" << endl;
-    //cout << e12 << endl;
-    //cout << "E_bar" << endl;
-    //cout << E_bar << endl;
-    //cout << "r1" << endl;
-    //cout << r_1 << endl;
-    //cout << "r2" << endl;
-    //cout << r_2 << endl;
-    //cout << "object_current_pos" << endl;
-    //cout << object_current_pos << endl;
+    cout << "r1_ee_rf" << endl;
+    cout << robot1_ee_pos_r1f << endl;
+    cout << "r1_ee_wf" << endl;
+    cout << robot1_ee_pos_wf << endl;
+    cout << "r2_ee_rf" << endl;
+    cout << robot2_ee_pos_r2f << endl;
+    cout << "r2_ee_wf" << endl;
+    cout << robot2_ee_pos_wf << endl;
+    cout << "e12" << endl;
+    cout << e12 << endl;
+    cout << "E_bar" << endl;
+    cout << E_bar << endl;
+    cout << "r1" << endl;
+    cout << r_1 << endl;
+    cout << "r2" << endl;
+    cout << r_2 << endl;
+    cout << "object_current_pos" << endl;
+    cout << object_current_pos << endl;
   
     W_f << I3, I3, r_1_hat, r_2_hat;
     W_m << zero3, zero3, I3, I3;
     W << W_f, W_m;
     // (eq 9.27), with axes switched accordingly
-    Itilde << 0, 0.5, 0, 0, -0.5, 0,
+    Itilde << 0, -0.5, 0, 0, 0.5, 0,
               1, 0, 0, 0, 0, 0,
               0, 0, -1, 0, 0, 0,
               0, 0, 0, -1, 0, 0,
