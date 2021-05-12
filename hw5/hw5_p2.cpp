@@ -234,30 +234,72 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
 	Eigen::VectorXd robot1_g(robot1->dof());
 	Eigen::VectorXd robot2_g(robot2->dof());
 
+	Eigen::VectorXd robot1_p(6);
+	Eigen::VectorXd robot2_p(6);
+
 	// **  Other sugested variables and gains **
-	// Eigen::Vector3d object_com_in_robot1_ee_frame;
-	// Eigen::Vector3d object_com_in_robot2_ee_frame;
-	// Eigen::MatrixXd robot1_j0_objcom(6, robot1->dof());
-	// Eigen::MatrixXd robot2_j0_objcom(6, robot2->dof());
-	// Eigen::MatrixXd robot1_j0_objectcom_bar(robot1->dof(), 6);
-	// Eigen::MatrixXd robot2_j0_objectcom_bar(robot2->dof(), 6);
-	// Eigen::MatrixXd robot1_objcom_inertia(6,6);
-	// Eigen::MatrixXd robot2_objcom_inertia(6,6);
+	Eigen::Vector3d object_com_in_robot1_ee_frame;
+	Eigen::Vector3d object_com_in_robot2_ee_frame;
+	Eigen::MatrixXd robot1_j0_objcom(6, robot1->dof());
+	Eigen::MatrixXd robot2_j0_objcom(6, robot2->dof());
+	Eigen::MatrixXd robot1_j0_objcom_bar(robot1->dof(), 6);
+	Eigen::MatrixXd robot2_j0_objcom_bar(robot2->dof(), 6);
+	Eigen::MatrixXd robot1_objcom_inertia(6,6);
+	Eigen::MatrixXd robot2_objcom_inertia(6,6);
+  Eigen::Affine3d robot1_base_to_ee; // Transformation from base frame to ee link frame
+  Eigen::Affine3d robot2_base_to_ee; // Transformation from base frame to ee link frame
 
-	// Eigen::MatrixXd augmented_object_inertia(6,6);
-	// Eigen::VectorXd augmented_object_p(6);
+	Eigen::MatrixXd augmented_object_inertia(6,6);
+	Eigen::VectorXd augmented_object_p(6);
 
-	// Eigen::MatrixXd G(2*6, 2*6);
-	// Eigen::MatrixXd W(6, 2*6);
+	Eigen::MatrixXd G(2*6, 2*6);
+	Eigen::MatrixXd W(6, 2*6);
+	Eigen::MatrixXd W_f(6, 6);
+	Eigen::MatrixXd W_m(6, 6);
+  Eigen::MatrixXd E_bar(1,6);
+  Eigen::Vector3d e12; // Vector from r1 ee to r2 ee
+  Eigen::MatrixXd Itilde(5,6);
 
-	// Eigen::Vector3d obj_des_pos;
-	// Eigen::Vector3d obj_ori_error;
-	// Eigen::VectorXd obj_task_err(6);
-	// Eigen::VectorXd force_des_vec(12);
-	// Eigen::VectorXd force_ee_vec(12);
+  const Eigen::MatrixXd I3 = MatrixXd::Identity(3, 3); // 3 x 3 identity matrix
+  const Eigen::MatrixXd I9 = MatrixXd::Identity(9,9);
+  const Eigen::Matrix3d zero3 = MatrixXd::Zero(3,3);
+  const Eigen::MatrixXd zero5_6 = MatrixXd::Zero(5,6);
+  const Eigen::MatrixXd zero1_6 = MatrixXd::Zero(1,6);
 
-	// double kp = 30;
-	// double kv = 10;
+  Eigen::Vector3d robot1_ee_pos_r1f; // robot1 ee position in robot1 base frame
+  Eigen::Vector3d robot2_ee_pos_r2f; // robot2 ee position in robot2 base frame
+  Eigen::Vector3d robot1_ee_pos_wf; // robot1 ee position in world frame
+  Eigen::Vector3d robot2_ee_pos_wf; // robot2 ee position in world frame
+
+  Eigen::Vector3d r_1; // Vector from com to r1 ee
+  Eigen::Vector3d r_2; // Vector from com to r2 ee
+  Eigen::Matrix3d r_1_hat; // cross product matrix r_1
+  Eigen::Matrix3d r_2_hat; // cross product matrix of r_2
+
+	Eigen::Vector3d obj_des_pos;
+	Eigen::VectorXd obj_des_vel(6);
+	Eigen::VectorXd obj_cur_vel(6);
+	Eigen::VectorXd obj_des_acc(6);
+
+	Eigen::Vector3d obj_ori_error;
+	Eigen::VectorXd obj_task_err(6);
+	Eigen::VectorXd force_des_vec(12);
+	Eigen::VectorXd force_ee_vec(12);
+
+  Eigen::VectorXd F_star(6);
+  Eigen::VectorXd F_motion(6);
+  Eigen::VectorXd robot1_force_ee(6);
+  Eigen::VectorXd robot2_force_ee(6);
+
+  Quaterniond obj_quat_des;   // object desired quaternion
+  Quaterniond obj_quat_cur;   // object current quat
+
+  // Desired internal forces and moments
+  Vector3d int_f_des;
+  Vector3d int_m_des;
+
+	double kp = 30;
+	double kv = 10;
 
 	// ** Control Mode **
 	// 		0 = grasp stabilizing controller
@@ -303,23 +345,169 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
 		//---------------------------------------------------------------------
 		// ** FILL ME IN **
 
+    // Get transforms from base frame to ee frame
+	  Eigen::Affine3d robot1_base_frame = sim->getRobotBaseTransform(robot1_name);
+	  Eigen::Affine3d robot2_base_frame = sim->getRobotBaseTransform(robot2_name);
+    
+    // Get transforms from base frame to ee link frame
+    robot1->transform(robot1_base_to_ee, ee_link_name);
+    robot2->transform(robot2_base_to_ee, ee_link_name);
+
+    // Get object com in ee frame
+    object_com_in_robot1_ee_frame = robot1_base_to_ee * robot1_base_frame * object_current_pos;
+    object_com_in_robot2_ee_frame = robot2_base_to_ee * robot2_base_frame * object_current_pos;
+
+    cout << "Object com in robot 1 ee frame" << endl;
+    cout << object_com_in_robot1_ee_frame << endl;
+    cout << "Object com in robot 2 ee frame" << endl;
+    cout << object_com_in_robot2_ee_frame << endl;
+    
+    // Get Jacobians in eef frame at object com location
+    robot1->J_0(robot1_j0_objcom, ee_link_name, object_com_in_robot1_ee_frame);
+    robot2->J_0(robot2_j0_objcom, ee_link_name, object_com_in_robot2_ee_frame);
+
 		// --------------------------------------------------------------------
 		// (2) Augmented Object Model
 		//---------------------------------------------------------------------
 		// ** FILL ME IN **
+    
+    // Compute augmented object inertia
+    robot1_objcom_inertia=(robot1_j0_objcom*(robot1->_M_inv)*robot1_j0_objcom.transpose()).inverse();
+    robot2_objcom_inertia=(robot2_j0_objcom*(robot2->_M_inv)*robot2_j0_objcom.transpose()).inverse();
 
+    augmented_object_inertia = robot1_objcom_inertia + robot2_objcom_inertia + object_inertia;
+
+    // Compute J_bar
+    robot1_j0_objcom_bar=(robot1->_M_inv)*robot1_j0_objcom.transpose()*robot1_objcom_inertia;
+    robot2_j0_objcom_bar=(robot2->_M_inv)*robot2_j0_objcom.transpose()*robot2_objcom_inertia;
+    // Get gravity
+    robot1->gravityVector(robot1_g);
+    robot2->gravityVector(robot2_g);
+
+    // Compute augmented object gravity
+    robot1_p = robot1_j0_objcom_bar.transpose() * robot1_g;
+    robot2_p = robot2_j0_objcom_bar.transpose() * robot2_g;
+    augmented_object_p = object_p + robot1_p + robot2_p;
+    
 		// --------------------------------------------------------------------
 		// (3) Grasp Matrix
 		//---------------------------------------------------------------------
 		// ** FILL ME IN **
 
+    // Get robot eef positions in world frame
+    robot1->position(robot1_ee_pos_r1f, ee_link_name);
+    robot2->position(robot2_ee_pos_r2f, ee_link_name);
+    robot1_ee_pos_wf = robot1_base_frame.inverse() * robot1_ee_pos_r1f; // TODO is this right? or inverse?
+    robot2_ee_pos_wf = robot2_base_frame.inverse() * robot2_ee_pos_r2f;
+
+    r_1 = robot1_ee_pos_wf - object_current_pos; 
+    r_2 = robot2_ee_pos_wf - object_current_pos; 
+    r_1_hat = getCrossProductMat(r_1);
+    r_2_hat = getCrossProductMat(r_2);
+
+    e12 = robot2_ee_pos_wf - robot1_ee_pos_wf;
+    E_bar << -e12/2.0, e12/2.0;
+
+    //cout << "rf" << endl;
+    //cout << robot1_ee_pos_r1f << endl;
+    //cout << "wf" << endl;
+    //cout << robot1_ee_pos_wf << endl;
+    //cout << "e12" << endl;
+    //cout << e12 << endl;
+    //cout << "E_bar" << endl;
+    //cout << E_bar << endl;
+    //cout << "r1" << endl;
+    //cout << r_1 << endl;
+    //cout << "r2" << endl;
+    //cout << r_2 << endl;
+    //cout << "object_current_pos" << endl;
+    //cout << object_current_pos << endl;
+  
+    W_f << I3, I3, r_1_hat, r_2_hat;
+    W_m << zero3, zero3, I3, I3;
+    W << W_f, W_m;
+    // (eq 9.27), with axes switched accordingly
+    Itilde << 0, 0.5, 0, 0, -0.5, 0,
+              1, 0, 0, 0, 0, 0,
+              0, 0, -1, 0, 0, 0,
+              0, 0, 0, -1, 0, 0,
+              0, 0, 0, 0, 0, -1;
+
+    G << W_f, W_m, E_bar, zero1_6, zero5_6, Itilde;
+    cout << G << endl;
+
 		// --------------------------------------------------------------------
 		// (4) Force Control 
 		//---------------------------------------------------------------------
+
 		if (control_mode == CONTROL_AUGMENTED_OBJECT) {
-		
 		// ** FILL ME IN ** Compute tau1 and tau2 	
 
+    // Object desired positions, velocities, accelerations
+    obj_des_pos(0) = 0;
+    obj_des_pos(1) = 0.15 * sin(2*M_PI*curr_time/3);
+    obj_des_pos(2) = 0.4;
+    obj_quat_des.w() = 1.0;
+    obj_quat_des.x() = 0.0;
+    obj_quat_des.y() = 0.0;
+    obj_quat_des.z() = 0.0;
+
+    obj_des_vel(0) = 0;
+    obj_des_vel(1) = 0.15*(2*M_PI/3)*cos(2*M_PI*curr_time/3);
+    obj_des_vel(2) = 0.0;
+    obj_des_vel(3) = 0.0;
+    obj_des_vel(4) = 0.0;
+    obj_des_vel(5) = 0.0;
+
+    obj_des_acc(0) = 0;
+    obj_des_acc(1) = -0.15*(2*M_PI/3)*(2*M_PI/3)*sin(2*M_PI*curr_time/3);
+    obj_des_acc(2) = 0.0;
+    obj_des_acc(3) = 0.0;
+    obj_des_acc(4) = 0.0;
+    obj_des_acc(5) = 0.0;
+
+    // Get object orientation error
+    Quaterniond obj_quat_cur(object_com_frame.linear()); // Current object quat
+    Sai2Model::orientationError(obj_ori_error, obj_quat_des, obj_quat_cur);
+
+    object_model->velocity6dInWorld(obj_cur_vel, object_link_name);
+
+    obj_task_err << (object_current_pos - obj_des_pos), obj_ori_error;
+    F_star = obj_des_acc - kv*(obj_cur_vel - obj_des_vel) - kp * obj_task_err;
+    F_motion = augmented_object_inertia * F_star + object_p;
+
+    // Set desired internal forces and moments
+    int_f_des << 0, -15, 0;
+    int_m_des << 0, 0, 0;
+
+    // Compute desired forces on object
+    force_des_vec << F_motion, int_f_des, int_m_des;
+
+    // Compute desired ee forces
+    force_ee_vec = G.inverse() * force_des_vec;
+    
+    // Parse out robot 1 and robot 2 ee forces
+    robot1_force_ee(0) = force_ee_vec(0);
+    robot1_force_ee(1) = force_ee_vec(1);
+    robot1_force_ee(2) = force_ee_vec(2);
+    robot1_force_ee(3) = force_ee_vec(6);
+    robot1_force_ee(4) = force_ee_vec(7);
+    robot1_force_ee(5) = force_ee_vec(8);
+
+    robot2_force_ee(0) = force_ee_vec(3);
+    robot2_force_ee(1) = force_ee_vec(4);
+    robot2_force_ee(2) = force_ee_vec(5);
+    robot2_force_ee(3) = force_ee_vec(9);
+    robot2_force_ee(4) = force_ee_vec(10);
+    robot2_force_ee(5) = force_ee_vec(11);
+
+		Eigen::MatrixXd robot1_j0_ee(6, robot1->dof());
+		Eigen::MatrixXd robot2_j0_ee(6, robot2->dof());
+		robot1->J_0(robot1_j0_ee, ee_link_name, Eigen::Vector3d::Zero());
+		robot2->J_0(robot2_j0_ee, ee_link_name, Eigen::Vector3d::Zero());
+
+    tau1 = robot1_j0_ee.transpose()*robot1_force_ee + robot1_g;
+    tau2 = robot2_j0_ee.transpose()*robot2_force_ee + robot2_g;
 
 		} else if (control_mode == CONTROL_GRASP_STABILIZE) { // initial grasp stabilization
 			
