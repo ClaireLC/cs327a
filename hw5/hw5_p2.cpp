@@ -297,8 +297,8 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
   Vector3d int_f_des;
   Vector3d int_m_des;
 
-	double kp = 30;
-	double kv = 10;
+	double kp = 3;
+	double kv = 1;
 
 	// ** Control Mode **
 	// 		0 = grasp stabilizing controller
@@ -344,7 +344,7 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
 		//---------------------------------------------------------------------
 		// ** FILL ME IN **
 
-    // Get transforms from base frame to ee frame
+    // Get transforms from base frame to world frame
 	  Eigen::Affine3d robot1_base_frame = sim->getRobotBaseTransform(robot1_name);
 	  Eigen::Affine3d robot2_base_frame = sim->getRobotBaseTransform(robot2_name);
     
@@ -396,7 +396,7 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
     // Get robot eef positions in world frame
     robot1->position(robot1_ee_pos_r1f, ee_link_name);
     robot2->position(robot2_ee_pos_r2f, ee_link_name);
-    robot1_ee_pos_wf = robot1_base_frame * robot1_ee_pos_r1f; // TODO is this right? or inverse?
+    robot1_ee_pos_wf = robot1_base_frame * robot1_ee_pos_r1f;
     robot2_ee_pos_wf = robot2_base_frame * robot2_ee_pos_r2f;
 
     r_1 = robot1_ee_pos_wf - object_current_pos; 
@@ -431,7 +431,6 @@ void control(Sai2Model::Sai2Model* robot1, Sai2Model::Sai2Model* robot2, Sai2Mod
     W_f << I3, I3, r_1_hat, r_2_hat;
     W_m << zero3, zero3, I3, I3;
     W << W_f, W_m;
-    // (eq 9.27), with axes switched accordingly
     Itilde << 0, -0.5, 0, 0, 0.5, 0,
               1, 0, 0, 0, 0, 0,
               0, 0, -1, 0, 0, 0,
