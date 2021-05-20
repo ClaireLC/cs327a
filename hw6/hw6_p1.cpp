@@ -210,36 +210,55 @@ void control(Sai2Model::Sai2Model* robot, Simulation::Sai2Simulation* sim) {
 	Eigen::MatrixXd Jconst_full_6(6, robot->dof());
 	// desired end effector positions
 	Eigen::Vector3d ee_pos_des;
+	Eigen::Vector3d ee_vel_des;
+	Eigen::Vector3d ee_acc_des;
 	// transform from base to closest link 
 	Eigen::Affine3d T_closest_link;
 
 	// ** Other suggested variables **
-	// bool constraint_active = false;
+	bool constraint_active = false;
 	// double constraint_force;
-	// Eigen::Vector3d n_c;
-	// Eigen::MatrixXd Jc(1, robot->dof());
-	// Eigen::VectorXd tau_c(robot->dof());
+	Eigen::Vector3d n_c;
+	Eigen::Vector3d xci_to_c;
+	Eigen::MatrixXd Jc(1, robot->dof());
+	Eigen::VectorXd tau_c(robot->dof());
 	// Eigen::Vector3d constraint_acc_in_task;
-	// Eigen::MatrixXd Lambda_c(1,1);
-	// Eigen::MatrixXd Jcbar(robot->dof(), 1);
-	// Eigen::MatrixXd Nc(robot->dof(), robot->dof());
+	Eigen::MatrixXd Lambda_c(1,1);
+	Eigen::MatrixXd Jc_bar(robot->dof(), 1);
+	Eigen::MatrixXd Nc(robot->dof(), robot->dof());
 
-	// Eigen::Vector3d ee_pos;
-	// Eigen::MatrixXd Jv(3, robot->dof());
-	// Eigen::MatrixXd Jvbar(robot->dof(), 3);
-	// Eigen::MatrixXd Nv(robot->dof(), robot->dof());
-	// Eigen::Matrix3d Lambda_v;
+	Eigen::Vector3d ee_pos;
+	Eigen::Vector3d ee_vel;
+	Eigen::MatrixXd Jv(3, robot->dof());
+	Eigen::MatrixXd Jv_bar(robot->dof(), 3);
+	Eigen::MatrixXd Nv(robot->dof(), robot->dof());
+	Eigen::Matrix3d Lambda_v;
+	Eigen::VectorXd tau_tc(robot->dof());
 
-	// Eigen::VectorXd g(robot->dof());
+  // Posture control related variables
+	Eigen::VectorXd tau_p(robot->dof()); // Posture torque
+
+  // Additional variables
+  Eigen::MatrixXd A(robot->dof(), robot->dof());
+  Eigen::VectorXd q(robot->dof());
+  Eigen::VectorXd dq(robot->dof());
+	Eigen::VectorXd g(robot->dof());
+
+  double Uc_grad; // Gradient of constraint artificial potential field
+  Eigen::Vector3d F_star;
+  Eigen::Vector3d F_t;
+  Eigen::Vector3d p; //gravity vector at end-effector
 
 	// ** Suggested gains ** 
-	// const double constraint_dist_thresh = 0.095;
-	// const double eta = 0.3;
-	// const double kvc = 20;
-	// const double kpx = 20;
-	// const double kvx = 10;
-	// const double kpj = 30;
-	// const double kvj = 20;
+	const double constraint_dist_thresh = 0.095;
+	const double eta = 0.3;
+	const double kvc = 20;
+	const double kpx = 20;
+	const double kvx = 10;
+	const double kpj = 30;
+	const double kvj = 20;
+
+  const Eigen::MatrixXd In = Eigen::MatrixXd::Identity(robot->dof(), robot->dof()); // n x n identity matrix
 
 	while (fSimulationRunning) { //automatically set to false when simulation is quit
 		fTimerDidSleep = timer.waitForNextLoop();
@@ -269,8 +288,77 @@ void control(Sai2Model::Sai2Model* robot, Simulation::Sai2Simulation* sim) {
 		/* --------------------------------------------------------------------------------------
 			FILL ME IN: compute joint torques
 		-------------------------------------------------------------------------------------*/
-        
 
+      // Update 
+      robot->Jv(Jv, ee_link_name, ee_pos_local);
+      robot->gravityVector(g); // Update gravity vector
+      A  = robot->_M; // Mass matrix
+      q  = robot->_q;
+      dq = robot->_dq;
+      robot->position(ee_pos, ee_link_name, ee_pos_local);
+      robot->linearVelocity(ee_vel, ee_link_name, ee_pos_local);
+  
+      // Constraint controller
+      xci_to_c = sphere_center - closest_point; 
+      n_c = xci_to_c / xci_to_c.norm();
+
+      Lambda_c = (Jc * A.inverse() * Jc.transpose()).inverse();
+      Jc = n_c.transpose() * Jv_closest_point; // Constraint Jacobian
+      Jc_bar = A.inverse() * Jc.transpose() * Lambda_c;
+      Nc = In - Jc_bar * Jc;
+
+      if (closest_distance <= constraint_dist_thresh){
+        // Constraint potential field gradient
+        Uc_grad = eta * ((1/constraint_dist_thresh) - (1/closest_distance))
+                    * (1/closest_distance) * (1/closest_distance);
+
+        constraint_active = true;
+      }
+      else{
+        Uc_grad = 0;
+        constraint_active = false;
+      }
+
+      // Set constraint torques
+      if (constraint_active == true){
+        tau_c = Jc.transpose() * Uc_grad + Jc.transpose() * Lambda_c*(-kvc * Jc * dq);
+      }
+      else{
+        tau_c = Eigen::VectorXd::Zero(robot->dof());
+      }
+    
+      // Task controller
+      // Set desired ee positions, velocities, accelerations
+      ee_pos_des << 0.7, 0.2 + 0.4 * sin(2*M_PI*curr_time/6), 0.5;
+      ee_vel_des << 0.0, 0.4 * (M_PI/3) * cos(2*M_PI*curr_time/6), 0.0;
+      ee_acc_des << 0.0, -0.4 * (M_PI/3) * (M_PI/3) * sin(2*M_PI*curr_time/6), 0.0;
+
+      Lambda_v = (Jv * A.inverse() * Jv.transpose()).inverse();
+      //Lambda_v = (Jv * Nc * A.inverse() * Nc.transpose() * Jv.transpose()).inverse(); // L_tc
+      Jv_bar = A.inverse() * Jv.transpose() * Lambda_v;
+      p = Jv_bar.transpose() * g;
+      Nv = In - Jv_bar * Jv;
+
+      F_star = ee_acc_des - kpx * (ee_pos - ee_pos_des) - kvx *(ee_vel - ee_vel_des);
+      F_t = Lambda_v * F_star + p;
+
+      // Set task torques
+      if (constraint_active == true){
+        // Project task tau into constraint nullspace
+        tau_tc = Nc.transpose() * Jv.transpose() * F_t;
+      }
+      else{
+        tau_tc = Jv.transpose() * F_t;
+      }
+
+      // Posture controller
+      tau_p = Nv.transpose() * (A * (-kpj * (q-q_des) - kvj * dq) + g);
+      if (constraint_active == true){
+        // Project posture tau into constraint nullspace
+        tau_p = Nc.transpose() * tau_p;
+      }
+        
+    tau = tau_c + tau_tc + tau_p;
 		/* --------------------------------------------------------- */
 		sim->setJointTorques(robot_name, tau);
 
